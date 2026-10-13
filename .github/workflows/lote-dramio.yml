@@ -37,7 +37,13 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
-          pip install --quiet faster-whisper
+          # ⚠️ o huggingface_hub novo quebra o faster-whisper:
+          #    "open() got an unexpected keyword argument 'metadata_errors'"
+          # (aconteceu em 13/10: 173 de 198 episodios de um shard falharam por isso —
+          #  so os dramas que precisam de transcricao, familia media)
+          # por isso a versao vai FIXADA, nao 'latest' ✓
+          pip install --quiet "faster-whisper==1.0.3" "huggingface_hub==0.24.7" ctranslate2==4.3.1
+          python3 -c "import faster_whisper, huggingface_hub; print('faster-whisper', faster_whisper.__version__, '· hub', huggingface_hub.__version__)"
 
       # o lote.py tem os caminhos /root/rs fixos — em vez de editar 9 ocorrencias
       # (e arriscar quebrar o que ja funciona na VPS), recriamos /root/rs aqui ✓
