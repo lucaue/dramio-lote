@@ -29,8 +29,10 @@ def b2(url, body=None, token=None, ba=False):
 
 a = b2(f"{B2}/b2_authorize_account", ba=True)
 api, tok, acc = a["apiUrl"], a["authorizationToken"], a["accountId"]
-bid = next(b["bucketId"] for b in b2(f"{api}/b2api/v2/b2_list_buckets", {"accountId": acc}, tok)["buckets"]
-           if b["bucketName"] == BUCKET)
+bid = os.environ.get("B2_BUCKET_ID") or "28d8f0116fc43b2aa4170314"
+# ⚠️ NAO chamar b2_list_buckets: a chave RESTRITA (listFiles+readFiles+writeFiles, que e a
+# que deve rodar nos runners) NAO tem listBuckets e devolve 401/403 -> 100 shards falhando
+# em 'processar meu shard' (aconteceu em 13/10). O id do bucket vai direto ✓
 _pool, _lk = [], threading.Lock()
 POOL_ALVO = 64          # tokens de upload mantidos aquecidos
 
