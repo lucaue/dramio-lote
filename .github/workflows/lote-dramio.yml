@@ -44,6 +44,10 @@ jobs:
       - name: preparar /root/rs
         run: |
           sudo mkdir -p /root/rs
+          # ⚠️ /root e modo 700 do root: sem isto o usuario 'runner' nao consegue nem
+          # ATRAVESSAR /root para chegar em /root/rs -> "cd: /root/rs: Permission denied"
+          # (chmod 777 so em /root/rs nao basta — o pai bloqueia antes ✗)
+          sudo chmod 755 /root
           cp links_unificado_num.json dramio_preencher.json matriz_rapida.json \
              reelshort_catalog_pt_full.json /tmp/ 2>/dev/null || true
           sudo cp /tmp/*.json /root/rs/ 2>/dev/null || true
@@ -51,8 +55,10 @@ jobs:
           # retoma do que a VPS ja fez (3.600+ episodios) em vez de refazer tudo
           sudo cp estado_inicial.json /root/rs/lote_estado.json 2>/dev/null || true
           sudo chmod -R 777 /root/rs
-          echo "--- conteudo de /root/rs ---"
+          echo "--- conteudo de /root/rs (como o runner ve) ---"
           ls -la /root/rs | head -12
+          echo "--- teste de escrita como runner ---"
+          touch /root/rs/.teste_escrita && echo "escrita OK ✓" && rm -f /root/rs/.teste_escrita
 
       - name: processar meu shard
         env:
