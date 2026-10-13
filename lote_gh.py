@@ -382,7 +382,8 @@ def whisper_legendas(fonte_m3u8, W):
         if _MODELO is None:
             # cpu_threads=2: no padrao (todos os nucleos) varias transcricoes concorrentes
             # disputam os 12 nucleos e o lote inteiro trava
-            _MODELO = WhisperModel("base", device="cpu", compute_type="int8", cpu_threads=2)
+            _MODELO = WhisperModel(garante_modelo(), device="cpu", compute_type="int8",
+                                   cpu_threads=2)
         m = _MODELO
     segs_txt, _ = m.transcribe(f"{W}/tr.m4a", vad_filter=True, beam_size=1)
     cues = [(s.start, s.end, s.text.strip()) for s in segs_txt if s.text and s.text.strip()]
@@ -680,6 +681,43 @@ def mapa_links():
 
 
 _MODELO = None
+
+# ---- modelo do Whisper SEM huggingface_hub -------------------------------------
+# Medido 13/10 nos shards do GitHub: 164 de 198 episodios de um shard morriam com
+#   TypeError: open() got an unexpected keyword argument 'metadata_errors'
+# e a causa era o `huggingface_hub` (que o faster-whisper usa pra baixar o modelo)
+# incompativel com o `fsspec` do runner. Fixar versao NAO resolveu (testado).
+# Aqui os 4 arquivos do modelo vem por urllib direto do CDN do HuggingFace: o
+# faster-whisper recebe um DIRETORIO local e nem toca no huggingface_hub ✓
+MODELO_DIR = os.environ.get("WHISPER_DIR") or "/root/rs/fr_base"
+ARQS_MODELO = ("config.json", "model.bin", "tokenizer.json", "vocabulary.txt")
+_MODELO_PRONTO = False
+
+
+def garante_modelo():
+    """baixa (1x por processo) o Systran/faster-whisper-base pra MODELO_DIR"""
+    global _MODELO_PRONTO
+    if _MODELO_PRONTO:
+        return MODELO_DIR
+    os.makedirs(MODELO_DIR, exist_ok=True)
+    base = "https://huggingface.co/Systran/faster-whisper-base/resolve/main/"
+    for nome in ARQS_MODELO:
+        p = os.path.join(MODELO_DIR, nome)
+        if os.path.exists(p) and os.path.getsize(p) > 1000:
+            continue
+        d = None
+        for tent in range(4):
+            d = baixa(base + nome, 300)
+            if d and len(d) > 1000:
+                break
+            time.sleep(2 + 3 * tent)
+        if not d or len(d) <= 1000:
+            raise RuntimeError(f"nao baixei {nome} do modelo")
+        with open(p, "wb") as f:
+            f.write(d)
+        print(f"    modelo: {nome} {len(d)//1024} KB", flush=True)
+    _MODELO_PRONTO = True
+    return MODELO_DIR
 
 
 def main():
