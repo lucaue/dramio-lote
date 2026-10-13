@@ -683,6 +683,23 @@ _MODELO = None
 
 
 def main():
+    R = "/root/rs"
+    # Nos runners do GitHub o repo tem so 4 JSONs; o main() ainda carrega varios outros
+    # (links_dub, links_cf, links_pt, links_slow, links_derivados) que sao VESTIGIAIS do
+    # pipeline antigo — o pipeline novo tira o audio do links_unificado_num.json.
+    # Sem isto o shard morre com FileNotFoundError antes de processar 1 episodio ✗
+    # (aconteceu 2x em 13/10: primeiro links_dub.json, depois links_cf.json)
+    for _f in ("links_dub.json", "links_cf.json", "links_pt.json", "links_slow.json",
+               "links_derivados.json"):
+        _p = os.path.join(R, _f)
+        if not os.path.exists(_p):
+            try:
+                with open(_p, "w", encoding="utf-8") as _fh:
+                    _fh.write("{}")
+                print(f"placeholder vazio criado: {_f} (vestigial, nao usado)", flush=True)
+            except Exception as _e:
+                print(f"nao criei {_f}: {str(_e)[:60]}", flush=True)
+
     limite = int(sys.argv[1]) if len(sys.argv) > 1 else 20
     PAR = int(sys.argv[2]) if len(sys.argv) > 2 else 6
     R = "/root/rs"
