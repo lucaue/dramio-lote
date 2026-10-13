@@ -688,7 +688,13 @@ def main():
     R = "/root/rs"
     pre = json.load(open(f"{R}/dramio_preencher.json", encoding="utf-8"))
     mat = json.load(open(f"{R}/matriz_rapida.json", encoding="utf-8"))
-    dub = json.load(open(f"{R}/links_dub.json", encoding="utf-8"))
+    # links_dub.json NAO e mais usado pelo pipeline novo: o audio de cada idioma vem do
+    # links_unificado_num.json (via mapa_links_num). Nos runners do GitHub ele nem existe
+    # -> a leitura tem que tolerar a ausencia, senao o shard morre aqui ✗
+    try:
+        dub = json.load(open(f"{R}/links_dub.json", encoding="utf-8"))
+    except Exception:
+        dub = {}
     lcf = json.load(open(f"{R}/links_cf.json", encoding="utf-8"))
 
     # so dramas que tem audio PT e episodios com link
