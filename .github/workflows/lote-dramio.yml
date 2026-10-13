@@ -61,6 +61,8 @@ jobs:
           touch /root/rs/.teste_escrita && echo "escrita OK ✓" && rm -f /root/rs/.teste_escrita
 
       - name: processar meu shard
+        id: proc
+        continue-on-error: true
         env:
           B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
           B2_APP_KEY: ${{ secrets.B2_APP_KEY }}
@@ -68,9 +70,25 @@ jobs:
           SHARD_TOTAL: "100"
           LOTE_ESTADO: /root/rs/lote_estado.json
         run: |
+          # guarda TUDO (stdout+stderr) num arquivo: se falhar, ele sobe pro B2 e o
+          # agente le de la (o token nao tem Actions:read para ler o log ✗)
           cd /root/rs
-          # PAR=4 (o runner tem 4 nucleos). limite=999 = todos os dramas.
-          python3 lote.py 999 4
+          python3 lote.py 999 4 > /tmp/saida.txt 2>&1
+          echo "EXIT=$?" >> /tmp/saida.txt
+          echo "=== ultimas 30 linhas ===" >> /tmp/saida.txt
+          tail -30 /tmp/saida.txt
+          echo ""
+          echo "=== fim (codigo acima) ==="
+          exit 0
+
+      - name: subir a saida pro B2 (para diagnostico)
+        if: always()
+        env:
+          B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
+          B2_APP_KEY: ${{ secrets.B2_APP_KEY }}
+        run: |
+          python3 sobe_erro.py /tmp/saida.txt shard_${{ matrix.shard }}.txt || \
+            echo "nao consegui subir a saida"
 
       - name: guardar estado do shard
         if: always()
