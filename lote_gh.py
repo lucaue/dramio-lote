@@ -138,7 +138,17 @@ def roda_episodio_OLD(book_pt, pos, slug, idiomas_map, dub, cat, idx, titulo_dra
         # buraco na numeracao (ep faltando) — por posicao o audio de um idioma cairia
         # no episodio ERRADO, silenciosamente
         def link_de(vb, p):
-            return (mapa_links_num().get(vb) or {}).get(str(p + 1))
+            # ⚠️ BUG que segurava 1.017 episodios: aqui era `.get(str(p + 1))`, tratando a
+            # POSICAO como se fosse o NUMERO do episodio. Mas 1.150 books tem buraco na
+            # numeracao (ex.: 1..80 + 84,85,86) — nesses, as posicoes 80+ procuram os
+            # numeros 81,82,83, que nao existem -> "sem episodio" e o rabinho do book
+            # nunca saia. O mapa_links_num() ja documenta "casa por NUMERO, nao por
+            # posicao"; e o que esta feito agora.
+            _d = mapa_links_num().get(vb) or {}
+            if not _d:
+                return None
+            _n = sorted(_d, key=lambda x: int(x))
+            return _d[_n[p]] if 0 <= p < len(_n) else None
 
         # video de origem (PT) — idem, pelo numero
         orig = link_de(book_pt, pos)
@@ -425,7 +435,17 @@ def roda_episodio(book_pt, pos, slug, idiomas_map, dub, cat, idx, titulo_drama="
         os.makedirs(W, exist_ok=True)
 
         def link_de(vb, p):
-            return (mapa_links_num().get(vb) or {}).get(str(p + 1))
+            # ⚠️ BUG que segurava 1.017 episodios: aqui era `.get(str(p + 1))`, tratando a
+            # POSICAO como se fosse o NUMERO do episodio. Mas 1.150 books tem buraco na
+            # numeracao (ex.: 1..80 + 84,85,86) — nesses, as posicoes 80+ procuram os
+            # numeros 81,82,83, que nao existem -> "sem episodio" e o rabinho do book
+            # nunca saia. O mapa_links_num() ja documenta "casa por NUMERO, nao por
+            # posicao"; e o que esta feito agora.
+            _d = mapa_links_num().get(vb) or {}
+            if not _d:
+                return None
+            _n = sorted(_d, key=lambda x: int(x))
+            return _d[_n[p]] if 0 <= p < len(_n) else None
 
         orig = link_de(book_pt, pos)
         if not orig:
