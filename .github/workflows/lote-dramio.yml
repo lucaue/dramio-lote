@@ -1,10 +1,22 @@
 name: lote-dramio
+
+# Shards do lote Dramio -> Backblaze.
+#
+# Roda o MESMO pipeline da VPS (lote.py): familia master -> 540/720/1080 copiados
+# da fonte + ate 19 legendas OFICIAIS; familia media -> 720p + Whisper.
+# Cada shard pega 1/N da fila (indice estavel -> N shards cobrem tudo sem sobrepor).
+#
+# ⚠️ NAO usar a versao antiga do lote_gh.py: ela gerava 360/480/720 com re-encode e
+# legenda do Whisper, e escrevia no MESMO master.m3u8 -> sobrescrevia com pior
+# qualidade o que a VPS ja tinha feito certo.
+
 on:
   workflow_dispatch:
     inputs:
       shards:
-        description: "quantos shards"
+        description: "quantos shards (o matrix tem 100; use menos para testar)"
         default: "100"
+
 jobs:
   processar:
     runs-on: ubuntu-latest
@@ -16,22 +28,53 @@ jobs:
         shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99]
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
       - name: dependencias
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
           pip install --quiet faster-whisper
+
+      # o lote.py tem os caminhos /root/rs fixos — em vez de editar 9 ocorrencias
+      # (e arriscar quebrar o que ja funciona na VPS), recriamos /root/rs aqui ✓
+      - name: preparar /root/rs
+        run: |
+          sudo mkdir -p /root/rs
+          cp links_unificado_num.json dramio_preencher.json matriz_rapida.json \
+             reelshort_catalog_pt_full.json /tmp/ 2>/dev/null || true
+          sudo cp /tmp/*.json /root/rs/ 2>/dev/null || true
+          sudo cp lote_gh.py /root/rs/lote.py
+          # retoma do que a VPS ja fez (3.600+ episodios) em vez de refazer tudo
+          sudo cp estado_inicial.json /root/rs/lote_estado.json 2>/dev/null || true
+          sudo chmod -R 777 /root/rs
+          echo "--- conteudo de /root/rs ---"
+          ls -la /root/rs | head -12
+
       - name: processar meu shard
         env:
-          B2_KEY_ID: "${{ secrets.B2_KEY_ID }}"
-          B2_APP_KEY: "${{ secrets.B2_APP_KEY }}"
-        run: python3 lote_gh.py ${{ matrix.shard }} 100
+          B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
+          B2_APP_KEY: ${{ secrets.B2_APP_KEY }}
+          SHARD: ${{ matrix.shard }}
+          SHARD_TOTAL: "100"
+          LOTE_ESTADO: /root/rs/lote_estado.json
+        run: |
+          cd /root/rs
+          # PAR=4 (o runner tem 4 nucleos). limite=999 = todos os dramas.
+          python3 lote.py 999 4
+
+      - name: guardar estado do shard
+        if: always()
+        run: |
+          cp /root/rs/lote_estado.json ./estado-${{ matrix.shard }}.json 2>/dev/null || true
+          echo "feitos neste shard: $(python3 -c "import json;print(len(json.load(open('estado-${{ matrix.shard }}.json')).get('feitos',[])))" 2>/dev/null || echo '?')"
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: estado-${{ matrix.shard }}
-          path: out/
+          path: estado-${{ matrix.shard }}.json
           if-no-files-found: warn
