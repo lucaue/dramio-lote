@@ -13,7 +13,8 @@ BASE_W = "https://dramio-video.cinemioplay.workers.dev"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0"
 ESTADO = os.environ.get("LOTE_ESTADO", "/root/rs/lote_estado.json")
 NOME = {"pt": "Português", "es": "Español", "fr": "Français", "de": "Deutsch",
-        "th": "ไทย", "id": "Bahasa Indonesia", "en": "English"}
+        "th": "ไทย", "id": "Bahasa Indonesia", "en": "English",
+        "und": "Original"}
 basic = base64.b64encode(f"{KID}:{AK}".encode()).decode()
 
 
@@ -425,7 +426,66 @@ def whisper_legendas(fonte_m3u8, W):
     return out
 
 
-def roda_episodio(book_pt, pos, slug, idiomas_map, dub, cat, idx, titulo_drama="", eps_total=0):
+def normaliza_idioma_audio(valor):
+    codigo = str(valor or "").strip().lower()
+    return "id" if codigo == "in" else (codigo or "und")
+
+
+def fontes_audio_da_matriz(book_base, matriz_drama):
+    """Retorna somente faixas de audio reais.
+
+    A matriz tambem lista edicoes apenas legendadas (is_dub=0). Essas edicoes
+    nao podem virar faixas de audio: foi isso que fez sete seletores diferentes
+    apontarem para o mesmo audio em PÉTALAS DE SANGUE.
+    """
+    edicoes = (matriz_drama or {}).get("idiomas") or {}
+    itens = [(normaliza_idioma_audio(meta.get("lang") or chave), meta or {})
+             for chave, meta in edicoes.items() if (meta or {}).get("book")]
+    base = next((meta for _, meta in itens if meta.get("book") == book_base), {})
+    idioma_original = normaliza_idioma_audio(base.get("original_lang") or base.get("lang"))
+
+    def e_dublagem(meta):
+        return str(meta.get("is_dub") or "0").strip().lower() in {"1", "true", "yes"}
+
+    dublagens = [(lg, meta) for lg, meta in itens if e_dublagem(meta)]
+    fontes = {}
+
+    # Portugues dublado fica como padrao quando existir.
+    for lg, meta in dublagens:
+        if lg == "pt":
+            fontes[lg] = meta["book"]
+
+    # Para o audio original, prefira a edicao do proprio idioma original.
+    original = next((meta for lg, meta in itens
+                     if lg == idioma_original and not e_dublagem(meta)), None)
+    if original:
+        fontes.setdefault(idioma_original, original["book"])
+    elif base and not e_dublagem(base):
+        fontes.setdefault(idioma_original, base.get("book") or book_base)
+
+    for lg, meta in dublagens:
+        fontes.setdefault(lg, meta["book"])
+    return fontes
+
+
+def assinatura_audio(caminho_playlist):
+    """Assina amostras PCM para barrar idiomas com audio efetivamente duplicado."""
+    partes = []
+    for inicio in (5, 25, 45):
+        p = subprocess.run(
+            ["ffmpeg", "-v", "error", "-ss", str(inicio), "-i", caminho_playlist,
+             "-t", "4", "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "8000",
+             "-f", "s16le", "pipe:1"],
+            capture_output=True, timeout=180)
+        if p.returncode == 0 and p.stdout:
+            partes.append(p.stdout)
+    if not partes:
+        return None
+    return hashlib.sha256(b"".join(partes)).hexdigest()
+
+
+def roda_episodio(book_pt, pos, slug, idiomas_map, dub, cat, idx, titulo_drama="", eps_total=0,
+                  capas_map=None):
     """UM episodio: video 540/720/1080 copiado da fonte + audio de cada dublagem +
     legendas OFICIAIS. Sem re-encode de video, sem Whisper, sem traducao."""
     W = f"/root/rs/w_{idx}"
@@ -492,13 +552,13 @@ def roda_episodio(book_pt, pos, slug, idiomas_map, dub, cat, idx, titulo_drama="
 
         # ---------- audios ----------
         tem_audio = []
-        for lg in ["pt"] + [l for l in idiomas_map if l != "pt"]:
+        assinaturas_audio = {}
+        for lg, vb in (idiomas_map or {"und": book_pt}).items():
             out = f"{W}/a_{lg}"
             os.makedirs(out, exist_ok=True)
-            if lg == "pt":
+            if vb == book_pt:
                 fonte = menor
             else:
-                vb = idiomas_map.get(lg)
                 u = link_de(vb, pos)
                 if not u:
                     shutil.rmtree(out, ignore_errors=True)
@@ -530,6 +590,14 @@ def roda_episodio(book_pt, pos, slug, idiomas_map, dub, cat, idx, titulo_drama="
                                 f"{out}/seg%03d.ts", f"{out}/index.m3u8"],
                                capture_output=True, text=True, timeout=3600)
             if p.returncode == 0 and os.path.isdir(out) and os.listdir(out):
+                assinatura = assinatura_audio(f"{out}/index.m3u8")
+                duplicado_de = assinaturas_audio.get(assinatura) if assinatura else None
+                if duplicado_de:
+                    print(f"    audio {lg} duplicado de {duplicado_de}; faixa removida", flush=True)
+                    shutil.rmtree(out, ignore_errors=True)
+                    continue
+                if assinatura:
+                    assinaturas_audio[assinatura] = lg
                 tem_audio.append(lg)
             else:
                 shutil.rmtree(out, ignore_errors=True)
@@ -573,7 +641,7 @@ def roda_episodio(book_pt, pos, slug, idiomas_map, dub, cat, idx, titulo_drama="
         T.append((f"{P}/master.m3u8", master, "application/vnd.apple.mpegurl"))
 
         if pos == 0:
-            for lg, vb in (idiomas_map or {}).items():
+            for lg, vb in (capas_map or idiomas_map or {}).items():
                 cov = (cat or {}).get(vb) if cat else None
                 if not cov:
                     try:
@@ -789,17 +857,21 @@ def main():
         n = len(mapa_links_num().get(b) or {})
         if n == 0:
             continue
-        idiomas = {lg: (x or {}).get("book") for lg, x in ((m.get("idiomas") or {}).items())}
+        edicoes = m.get("idiomas") or {}
+        idiomas = fontes_audio_da_matriz(b, m)
+        capas = {normaliza_idioma_audio((x or {}).get("lang") or lg): (x or {}).get("book")
+                 for lg, x in edicoes.items() if (x or {}).get("book")}
         did = r.get("drama_id") or b
         cand = {"titulo": r.get("title_dramio"), "slug": slug_de(r.get("title_dramio")),
-                "eps": n, "idiomas": idiomas, "book": b, "n_id": len(idiomas)}
+                "eps": n, "idiomas": idiomas, "capas": capas, "book": b,
+                "n_id": len(edicoes)}
         atual = por_drama.get(did)
         if atual is None or cand["n_id"] > atual["n_id"] or \
                 (cand["n_id"] == atual["n_id"] and cand["eps"] > atual["eps"]):
             por_drama[did] = cand
 
     alvos = {v["book"]: {"titulo": v["titulo"], "slug": v["slug"], "eps": v["eps"],
-                         "idiomas": v["idiomas"]}
+                         "idiomas": v["idiomas"], "capas": v["capas"]}
              for v in list(por_drama.values())[:limite]}
     print(f"dramas alvo: {len(alvos)} (deduplicados de {len(pre)} entradas · "
           f"{sum(1 for r in pre if r.get('book_id'))} book_ids)", flush=True)
@@ -833,7 +905,8 @@ def main():
     t0 = time.time()
     okc = errc = 0
     with cf.ThreadPoolExecutor(max_workers=PAR) as ex:
-        futs = {ex.submit(roda_episodio, b, p, i["slug"], i["idiomas"], dub, None, f"{b[:8]}_{p}", i["titulo"], i["eps"]): (b, p, i)
+        futs = {ex.submit(roda_episodio, b, p, i["slug"], i["idiomas"], dub, None,
+                          f"{b[:8]}_{p}", i["titulo"], i["eps"], i["capas"]): (b, p, i)
                 for b, p, i in tarefas}
         n = 0
         for f in cf.as_completed(futs):
